@@ -1,0 +1,5 @@
+# 抽出・復元コマンドの既定出力先（チャット内容を誤ってコミットしないため除外）
+CopilotSessionRestore_Output/
+
+# Claude Code のローカル設定（マシン固有の権限許可リストなどを含むため除外）
+.claude/
