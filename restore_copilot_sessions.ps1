@@ -45,18 +45,30 @@ function ConvertFrom-FileUri {
 }
 
 function Get-WorkspaceFolderPath {
+    # 戻り値が "(" で始まる文字列は実フォルダパスではない(マルチルート等)ことを示す目印。
+    # 呼び出し側はこの規約で存在チェック対象かどうかを判定する。
     param($WorkspaceDir)
     $wsJsonPath = Join-Path $WorkspaceDir.FullName 'workspace.json'
     if (-not (Test-Path -LiteralPath $wsJsonPath)) { return $null }
     try {
-        $wsJson = Get-Content -LiteralPath $wsJsonPath -Raw | ConvertFrom-Json
+        $wsJson = Get-Content -LiteralPath $wsJsonPath -Raw -Encoding UTF8 | ConvertFrom-Json
         if ($wsJson.folder) {
             return ConvertFrom-FileUri -Uri $wsJson.folder
+        }
+        if ($wsJson.workspace) {
+            return '(マルチルートワークスペース)'
         }
     } catch {
         Write-Warning "workspace.json の読み取りに失敗しました ($wsJsonPath): $($_.Exception.Message)"
     }
     return $null
+}
+
+function Test-WorkspaceFolderPath {
+    param([string]$FolderPath)
+    if (-not $FolderPath) { return $true }
+    if ($FolderPath.StartsWith('(')) { return $true }
+    return (Test-Path -LiteralPath $FolderPath)
 }
 
 function Get-WorkspaceLabel {
@@ -70,9 +82,55 @@ function Get-WorkspaceLabel {
     return $WorkspaceDir.Name
 }
 
+function Set-JsonPatchValue {
+    # chatSessions/*.jsonl の kind:1/2 行は「パスkに値vを設定する」という差分更新であり、
+    # 配列はパス末尾に到達するまで毎回丸ごと置き換えられるため、範囲外インデックスへの
+    # 追記は基本的に発生しない想定だが、念のため配列拡張にも対応しておく。
+    param($Container, [object[]]$Path, $Value)
+
+    $key = $Path[0]
+    $rest = if ($Path.Count -gt 1) { $Path[1..($Path.Count - 1)] } else { @() }
+    $isIndex = ($key -is [int]) -or ($key -is [long]) -or ($key -is [double])
+
+    if ($isIndex) {
+        $idx = [int]$key
+        $arr = @($Container)
+        if ($idx -ge $arr.Count) {
+            $newArr = New-Object object[] ($idx + 1)
+            for ($i = 0; $i -lt $arr.Count; $i++) { $newArr[$i] = $arr[$i] }
+            $arr = $newArr
+        }
+        if ($rest.Count -eq 0) {
+            $arr[$idx] = $Value
+        } else {
+            $arr[$idx] = Set-JsonPatchValue -Container $arr[$idx] -Path $rest -Value $Value
+        }
+        return , $arr
+    } else {
+        if ($null -eq $Container -or -not ($Container -is [System.Management.Automation.PSCustomObject])) {
+            $obj = New-Object PSCustomObject
+        } else {
+            $obj = $Container
+        }
+        $hasProp = $obj.PSObject.Properties.Match($key).Count -gt 0
+        if ($rest.Count -eq 0) {
+            $newValue = $Value
+        } else {
+            $existingChild = if ($hasProp) { $obj.$key } else { $null }
+            $newValue = Set-JsonPatchValue -Container $existingChild -Path $rest -Value $Value
+        }
+        if ($hasProp) {
+            $obj.$key = $newValue
+        } else {
+            Add-Member -InputObject $obj -NotePropertyName $key -NotePropertyValue $newValue -Force
+        }
+        return $obj
+    }
+}
+
 function Read-ChatSessionFile {
     param([string]$Path)
-    $lines = Get-Content -LiteralPath $Path -ErrorAction Stop
+    $lines = Get-Content -LiteralPath $Path -Encoding UTF8 -ErrorAction Stop
     $sessionObj = $null
     foreach ($line in $lines) {
         if ([string]::IsNullOrWhiteSpace($line)) { continue }
@@ -82,10 +140,15 @@ function Read-ChatSessionFile {
             Write-Warning "JSON行の解析に失敗しました ($Path): $($_.Exception.Message)"
             continue
         }
-        if ($null -ne $record.v) {
+        if ($record.kind -eq 0) {
+            # kind:0 は完全なスナップショット。これを基点に以降の差分(kind:1/2)を適用していく。
             $sessionObj = $record.v
-        } elseif ($null -eq $sessionObj) {
-            $sessionObj = $record
+        } elseif ($null -ne $record.k) {
+            if ($null -eq $sessionObj) {
+                Write-Warning "スナップショット(kind:0)が見つかる前に差分行が出現しました ($Path)。この行は無視します。"
+                continue
+            }
+            $sessionObj = Set-JsonPatchValue -Container $sessionObj -Path @($record.k) -Value $record.v
         }
     }
     return $sessionObj
@@ -111,6 +174,42 @@ function Get-ResponsePartText {
     param($Part)
     if ($null -eq $Part) { return $null }
     if ($Part -is [string]) { return $Part }
+
+    $kind = $null
+    if ($Part.PSObject.Properties.Match('kind').Count -gt 0) { $kind = $Part.kind }
+
+    switch ($kind) {
+        'mcpServersStarting' {
+            # 内部的なノイズで会話内容を持たないため除外する
+            return $null
+        }
+        'inlineReference' {
+            $ref = $Part.inlineReference
+            $refPath = $null
+            if ($ref) {
+                if ($ref.PSObject.Properties.Match('fsPath').Count -gt 0) { $refPath = $ref.fsPath }
+                elseif ($ref.PSObject.Properties.Match('path').Count -gt 0) { $refPath = $ref.path }
+            }
+            if ($refPath) { return "``$refPath``" }
+            return $null
+        }
+        'toolInvocationSerialized' {
+            $im = $Part.invocationMessage
+            $msg = $null
+            if ($im -is [string]) { $msg = $im }
+            elseif ($im -and $im.PSObject.Properties.Match('value').Count -gt 0) { $msg = [string]$im.value }
+            if ([string]::IsNullOrWhiteSpace($msg)) { return $null }
+            return "_($msg)_"
+        }
+        'thinking' {
+            $v = $Part.value
+            if ($v -is [string] -and -not [string]::IsNullOrWhiteSpace($v)) {
+                return (($v -split "`n" | ForEach-Object { "> $_" }) -join "`n")
+            }
+            return $null
+        }
+    }
+
     if ($Part.PSObject.Properties.Match('value').Count -gt 0) {
         $v = $Part.value
         if ($v -is [string]) { return $v }
@@ -530,7 +629,11 @@ function Invoke-ListWorkspaces {
             $lastModified = ($sessionFiles | Sort-Object LastWriteTime -Descending | Select-Object -First 1).LastWriteTime
         }
         $folderPath = Get-WorkspaceFolderPath -WorkspaceDir $wsDir
-        if (-not $folderPath) { $folderPath = '(workspace.json なし)' }
+        if (-not $folderPath) {
+            $folderPath = '(workspace.json なし)'
+        } elseif (-not (Test-WorkspaceFolderPath -FolderPath $folderPath)) {
+            $folderPath = "⚠ $folderPath (フォルダが見つかりません。移動/改名/削除済みの可能性)"
+        }
 
         $rows += [PSCustomObject]@{
             WorkspaceId   = $wsDir.Name
@@ -543,6 +646,7 @@ function Invoke-ListWorkspaces {
     $rows = @($rows | Sort-Object -Property @{ Expression = 'LastSessionAt'; Descending = $true })
     $rows | Format-Table -AutoSize -Property WorkspaceId, Folder, SessionCount, LastSessionAt | Out-String -Width 4096 | Write-Host
     Write-Host "合計ワークスペース数: $($rows.Count)"
+    Write-Host '⚠ が付いているワークスペースは、記録されたフォルダが現在見つかりません。復元先として指定すると、実際にVS Codeで開いているフォルダとは異なる場所に復元してしまう可能性があるため注意してください。'
     Write-Host ''
     Write-Host 'WorkspaceId の値を -RestoreFromWorkspaceId / -RestoreToWorkspaceId に指定してください。'
 }
