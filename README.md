@@ -26,6 +26,7 @@ This tool finds, reads, exports, and — if you need it — restores that data, 
 - Built-in `-ListWorkspaces` / `-ListSessionsForWorkspaceId` commands — no need to manually open `workspace.json` files to find IDs
 - `state.vscdb` is never touched unless you explicitly opt in with `-IncludeStateDbIndex`, and it is backed up first when you do
 - A step-by-step guide site that works by opening the HTML file directly (`file://`), no server required
+- Console messages are in English by default; add `-Language ja` to switch to Japanese
 
 ### Requirements
 
@@ -37,6 +38,9 @@ This tool finds, reads, exports, and — if you need it — restores that data, 
 ```powershell
 # 1. Find your workspace IDs (sorted by most recent activity)
 .\restore_copilot_sessions.ps1 -ListWorkspaces
+
+# All commands also accept -Language ja for Japanese console messages, e.g.:
+# .\restore_copilot_sessions.ps1 -ListWorkspaces -Language ja
 
 # 2. Extract sessions to Markdown
 .\restore_copilot_sessions.ps1 -Since "2026-06-01" -IncludeSummary
@@ -87,6 +91,7 @@ VS Code の GitHub Copilot Chat のセッション履歴は `%APPDATA%\Code\User
 - `-ListWorkspaces` / `-ListSessionsForWorkspaceId` でID確認が可能。`workspace.json` を手動で開く必要なし
 - `-IncludeStateDbIndex` を明示しない限り `state.vscdb` には一切触れず、指定した場合も事前にバックアップ
 - ブラウザで直接(`file://`)開けるステップバイステップの手順書サイト付き。サーバー不要
+- コンソールのメッセージは既定で英語。`-Language ja` を付けると日本語に切り替わります
 
 ### 必要環境
 
@@ -98,6 +103,9 @@ VS Code の GitHub Copilot Chat のセッション履歴は `%APPDATA%\Code\User
 ```powershell
 # 1. ワークスペースIDを確認（最終更新が新しい順）
 .\restore_copilot_sessions.ps1 -ListWorkspaces
+
+# 全コマンドで -Language ja を付けるとコンソール出力を日本語にできます。例:
+# .\restore_copilot_sessions.ps1 -ListWorkspaces -Language ja
 
 # 2. セッションをMarkdownへ抽出
 .\restore_copilot_sessions.ps1 -Since "2026-06-01" -IncludeSummary

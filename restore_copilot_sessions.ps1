@@ -18,10 +18,115 @@ param(
     [switch]$ForceRestoreOverwrite,
     [switch]$IncludeStateDbIndex,
     [switch]$ListWorkspaces,
-    [string]$ListSessionsForWorkspaceId
+    [string]$ListSessionsForWorkspaceId,
+    [ValidateSet('en', 'ja')]
+    [string]$Language = 'en'
 )
 
 $ErrorActionPreference = 'Stop'
+
+# ターミナル出力(Write-Host/Write-Warning/Write-Error/throw)用のメッセージテーブル。
+# 生成される Markdown ファイル(conversation.md 等)の内容はここでは対象にしていない。
+$Messages = @{
+    en = @{
+        WorkspaceJsonReadFailed   = 'Failed to read workspace.json ({0}): {1}'
+        JsonLineParseFailed       = 'Failed to parse a JSON line ({0}): {1}'
+        PatchBeforeSnapshot       = 'A diff line appeared before the kind:0 snapshot ({0}). Skipping this line.'
+        StateDbReadFailed         = 'Failed to read state.vscdb: {0}'
+        RestoreSkippedExisting    = 'Skipped restoring (already exists): {0} (use -ForceRestoreOverwrite to overwrite)'
+        CopyFailed                = 'Failed to copy ({0} -> {1}): {2}'
+        SourceNotFound            = 'Source folder not found: {0}'
+        SessionReadFailed         = 'Failed to read session ({0}): {1}'
+        SessionUnreadable         = 'Could not interpret session content: {0}'
+        ExtractSummaryHeader      = '=== Extraction Summary ==='
+        ExtractSourceCount        = 'source count (jsonl): {0}'
+        ExtractOutputCount        = 'Extracted sessions: {0}'
+        OutputLocation            = 'Output: {0}'
+        RestoreFromNotFound       = 'Restore source folder not found: {0}'
+        RestoreToNotFound         = 'Restore destination folder not found: {0} (open the target workspace in VS Code once first so its workspaceStorage folder is created, then run this again)'
+        ChatSessionsNotFound      = 'chatSessions folder not found in restore source: {0}'
+        NoSessionsToRestore       = 'No sessions found to restore.'
+        StateDbBackedUp           = 'Backed up state.vscdb: {0}'
+        StateDbSynced             = 'Synced state.vscdb (history index).'
+        StateDbSourceMissing      = "Skipped syncing state.vscdb because the restore source doesn't have one."
+        StateDbUntouched          = 'state.vscdb was not touched (-IncludeStateDbIndex not specified).'
+        RestoreSummaryHeader      = '=== Direct Restore Summary ==='
+        RestoreSourceCount        = 'source session count: {0}'
+        RestoreCopiedSkipped      = 'Copied: {0} / Skipped: {1}'
+        RestoreDestination        = 'Destination: {0}'
+        RestartReminder           = 'IMPORTANT: After restoring, fully quit VS Code and restart it.'
+        NoWorkspaceJson           = '(no workspace.json)'
+        MultiRootWorkspace        = '(multi-root workspace)'
+        FolderMissingMarker       = '⚠ {0} (folder not found - it may have been moved, renamed, or deleted)'
+        TotalWorkspaces           = 'Total workspaces: {0}'
+        FolderMissingNote         = "Workspaces marked with ⚠ have a recorded folder that can't currently be found. Restoring into one may put data somewhere other than the folder you actually open in VS Code."
+        WorkspaceIdHint           = 'Use the WorkspaceId value with -RestoreFromWorkspaceId / -RestoreToWorkspaceId.'
+        WorkspaceFolderNotFound   = 'Workspace folder not found: {0}'
+        Unreadable                = '(unreadable)'
+        NoMessages                = '(no messages)'
+        TotalSessions             = 'Total sessions: {0}'
+        SessionIdHint             = 'Use the SessionId value with -SessionId to narrow down what gets restored.'
+        RestoreFromIdRequired     = 'Direct restore requires -RestoreFromWorkspaceId (when restoring from a restore-package, also specify -RestorePackagePath and set -RestoreFromWorkspaceId to "restore-package").'
+        ProcessingError           = 'An error occurred while processing: {0}'
+    }
+    ja = @{
+        WorkspaceJsonReadFailed   = 'workspace.json の読み取りに失敗しました ({0}): {1}'
+        JsonLineParseFailed       = 'JSON行の解析に失敗しました ({0}): {1}'
+        PatchBeforeSnapshot       = 'スナップショット(kind:0)が見つかる前に差分行が出現しました ({0})。この行は無視します。'
+        StateDbReadFailed         = 'state.vscdb の読み取りに失敗しました: {0}'
+        RestoreSkippedExisting    = '既存のため復元をスキップしました: {0} (上書きするには -ForceRestoreOverwrite を指定してください)'
+        CopyFailed                = 'コピーに失敗しました ({0} -> {1}): {2}'
+        SourceNotFound            = '抽出元フォルダが見つかりません: {0}'
+        SessionReadFailed         = 'セッション読み取りに失敗しました ({0}): {1}'
+        SessionUnreadable         = 'セッション内容を解釈できませんでした: {0}'
+        ExtractSummaryHeader      = '=== 抽出結果サマリー ==='
+        ExtractSourceCount        = 'source 件数 (jsonl): {0}'
+        ExtractOutputCount        = '出力済みセッション件数: {0}'
+        OutputLocation            = '出力先: {0}'
+        RestoreFromNotFound       = '復元元フォルダが見つかりません: {0}'
+        RestoreToNotFound         = '復元先フォルダが見つかりません: {0} （対象ワークスペースを一度VS Codeで開いてworkspaceStorageフォルダを生成してから実行してください）'
+        ChatSessionsNotFound      = '復元元に chatSessions フォルダが見つかりません: {0}'
+        NoSessionsToRestore       = '復元対象のセッションが見つかりませんでした。'
+        StateDbBackedUp           = 'state.vscdb をバックアップしました: {0}'
+        StateDbSynced             = 'state.vscdb を同期しました（履歴表示用インデックス）。'
+        StateDbSourceMissing      = '復元元に state.vscdb が見つからないため同期をスキップしました。'
+        StateDbUntouched          = 'state.vscdb には触れていません（-IncludeStateDbIndex 未指定）。'
+        RestoreSummaryHeader      = '=== 直接復元結果サマリー ==='
+        RestoreSourceCount        = 'source セッション件数: {0}'
+        RestoreCopiedSkipped      = 'コピー件数: {0} / スキップ件数: {1}'
+        RestoreDestination        = '復元先: {0}'
+        RestartReminder           = '重要: 復元後はVS Codeを完全終了し、再起動してください。'
+        NoWorkspaceJson           = '(workspace.json なし)'
+        MultiRootWorkspace        = '(マルチルートワークスペース)'
+        FolderMissingMarker       = '⚠ {0} (フォルダが見つかりません。移動/改名/削除済みの可能性)'
+        TotalWorkspaces           = '合計ワークスペース数: {0}'
+        FolderMissingNote         = '⚠ が付いているワークスペースは、記録されたフォルダが現在見つかりません。復元先として指定すると、実際にVS Codeで開いているフォルダとは異なる場所に復元してしまう可能性があるため注意してください。'
+        WorkspaceIdHint           = 'WorkspaceId の値を -RestoreFromWorkspaceId / -RestoreToWorkspaceId に指定してください。'
+        WorkspaceFolderNotFound   = 'ワークスペースフォルダが見つかりません: {0}'
+        Unreadable                = '(読み取り不可)'
+        NoMessages                = '(発言なし)'
+        TotalSessions             = '合計セッション数: {0}'
+        SessionIdHint             = 'SessionId の値を -SessionId に指定すると、直接復元の対象を絞り込めます。'
+        RestoreFromIdRequired     = '直接復元には RestoreFromWorkspaceId を指定してください（restore-package から復元する場合は RestorePackagePath も併せて指定し、RestoreFromWorkspaceId には "restore-package" を指定します）。'
+        ProcessingError           = '処理中にエラーが発生しました: {0}'
+    }
+}
+
+function Get-Text {
+    param(
+        [Parameter(Position = 0, Mandatory = $true)]
+        [string]$Key,
+        [Parameter(Position = 1, ValueFromRemainingArguments = $true)]
+        [object[]]$FormatArgs
+    )
+    $lang = if ($Messages.ContainsKey($Language)) { $Language } else { 'en' }
+    $template = $Messages[$lang][$Key]
+    if (-not $template) { $template = $Key }
+    if ($FormatArgs -and $FormatArgs.Count -gt 0) {
+        return ($template -f $FormatArgs)
+    }
+    return $template
+}
 
 function Write-Utf8NoBom {
     param([string]$Path, [string]$Content)
@@ -56,10 +161,10 @@ function Get-WorkspaceFolderPath {
             return ConvertFrom-FileUri -Uri $wsJson.folder
         }
         if ($wsJson.workspace) {
-            return '(マルチルートワークスペース)'
+            return (Get-Text 'MultiRootWorkspace')
         }
     } catch {
-        Write-Warning "workspace.json の読み取りに失敗しました ($wsJsonPath): $($_.Exception.Message)"
+        Write-Warning (Get-Text 'WorkspaceJsonReadFailed' $wsJsonPath $_.Exception.Message)
     }
     return $null
 }
@@ -137,7 +242,7 @@ function Read-ChatSessionFile {
         try {
             $record = $line | ConvertFrom-Json -ErrorAction Stop
         } catch {
-            Write-Warning "JSON行の解析に失敗しました ($Path): $($_.Exception.Message)"
+            Write-Warning (Get-Text 'JsonLineParseFailed' $Path $_.Exception.Message)
             continue
         }
         if ($record.kind -eq 0) {
@@ -145,7 +250,7 @@ function Read-ChatSessionFile {
             $sessionObj = $record.v
         } elseif ($null -ne $record.k) {
             if ($null -eq $sessionObj) {
-                Write-Warning "スナップショット(kind:0)が見つかる前に差分行が出現しました ($Path)。この行は無視します。"
+                Write-Warning (Get-Text 'PatchBeforeSnapshot' $Path)
                 continue
             }
             $sessionObj = Set-JsonPatchValue -Container $sessionObj -Path @($record.k) -Value $record.v
@@ -272,7 +377,7 @@ function Build-SessionSummaryHeuristic {
         $topic = (Get-MessageText $requests[0].message).Trim()
     }
     if ($topic.Length -gt 120) { $topic = $topic.Substring(0, 120) + '…' }
-    if ([string]::IsNullOrWhiteSpace($topic)) { $topic = '(発言なし)' }
+    if ([string]::IsNullOrWhiteSpace($topic)) { $topic = '(発言なし)' } # summary.md はファイル内容のため言語切替の対象外
     [PSCustomObject]@{
         SessionId    = $SessionId
         Topic        = $topic
@@ -288,7 +393,7 @@ function Test-StateDbContainsId {
         $text = [System.Text.Encoding]::UTF8.GetString($bytes)
         return $text.Contains($Id)
     } catch {
-        Write-Warning "state.vscdb の読み取りに失敗しました: $($_.Exception.Message)"
+        Write-Warning (Get-Text 'StateDbReadFailed' $_.Exception.Message)
         return $false
     }
 }
@@ -366,7 +471,7 @@ function Copy-ArtifactSet {
 
         $exists = Test-Path -LiteralPath $destPath
         if ($exists -and -not $Force) {
-            Write-Warning "既存のため復元をスキップしました: $destPath (上書きするには -ForceRestoreOverwrite を指定してください)"
+            Write-Warning (Get-Text 'RestoreSkippedExisting' $destPath)
             $skipped += $a.Rel
             continue
         }
@@ -379,7 +484,7 @@ function Copy-ArtifactSet {
             }
             $copied += $a.Rel
         } catch {
-            Write-Warning "コピーに失敗しました ($srcPath -> $destPath): $($_.Exception.Message)"
+            Write-Warning (Get-Text 'CopyFailed' $srcPath $destPath $_.Exception.Message)
         }
     }
 
@@ -442,7 +547,7 @@ function Invoke-ExtractMode {
     )
 
     if (-not (Test-Path -LiteralPath $SourceRoot)) {
-        throw "抽出元フォルダが見つかりません: $SourceRoot"
+        throw (Get-Text 'SourceNotFound' $SourceRoot)
     }
     New-Item -ItemType Directory -Path $OutputRoot -Force | Out-Null
 
@@ -476,11 +581,11 @@ function Invoke-ExtractMode {
             try {
                 $session = Read-ChatSessionFile -Path $jf.FullName
             } catch {
-                Write-Warning "セッション読み取りに失敗しました ($($jf.FullName)): $($_.Exception.Message)"
+                Write-Warning (Get-Text 'SessionReadFailed' $jf.FullName $_.Exception.Message)
                 continue
             }
             if ($null -eq $session) {
-                Write-Warning "セッション内容を解釈できませんでした: $($jf.FullName)"
+                Write-Warning (Get-Text 'SessionUnreadable' $jf.FullName)
                 continue
             }
 
@@ -529,10 +634,10 @@ function Invoke-ExtractMode {
     }
 
     Write-Host ''
-    Write-Host '=== 抽出結果サマリー ==='
-    Write-Host "source 件数 (jsonl): $totalSource"
-    Write-Host "出力済みセッション件数: $totalOutput"
-    Write-Host "出力先: $OutputRoot"
+    Write-Host (Get-Text 'ExtractSummaryHeader')
+    Write-Host (Get-Text 'ExtractSourceCount' $totalSource)
+    Write-Host (Get-Text 'ExtractOutputCount' $totalOutput)
+    Write-Host (Get-Text 'OutputLocation' $OutputRoot)
 }
 
 function Invoke-DirectRestoreMode {
@@ -554,15 +659,15 @@ function Invoke-DirectRestoreMode {
     $toRoot = Join-Path $SourceRoot $RestoreToWorkspaceId
 
     if (-not (Test-Path -LiteralPath $fromRoot)) {
-        throw "復元元フォルダが見つかりません: $fromRoot"
+        throw (Get-Text 'RestoreFromNotFound' $fromRoot)
     }
     if (-not (Test-Path -LiteralPath $toRoot)) {
-        throw "復元先フォルダが見つかりません: $toRoot （対象ワークスペースを一度VS Codeで開いてworkspaceStorageフォルダを生成してから実行してください）"
+        throw (Get-Text 'RestoreToNotFound' $toRoot)
     }
 
     $chatSessionsPath = Join-Path $fromRoot 'chatSessions'
     if (-not (Test-Path -LiteralPath $chatSessionsPath)) {
-        throw "復元元に chatSessions フォルダが見つかりません: $chatSessionsPath"
+        throw (Get-Text 'ChatSessionsNotFound' $chatSessionsPath)
     }
 
     $sessionFiles = @(Get-ChildItem -LiteralPath $chatSessionsPath -Filter '*.jsonl' -File -ErrorAction SilentlyContinue)
@@ -571,7 +676,7 @@ function Invoke-DirectRestoreMode {
     }
 
     if ($sessionFiles.Count -eq 0) {
-        Write-Warning '復元対象のセッションが見つかりませんでした。'
+        Write-Warning (Get-Text 'NoSessionsToRestore')
         return
     }
 
@@ -590,31 +695,31 @@ function Invoke-DirectRestoreMode {
             if (Test-Path -LiteralPath $toDb) {
                 $backupPath = "$toDb.bak_$(Get-Date -Format 'yyyyMMddHHmmss')"
                 Copy-Item -LiteralPath $toDb -Destination $backupPath -Force
-                Write-Host "state.vscdb をバックアップしました: $backupPath"
+                Write-Host (Get-Text 'StateDbBackedUp' $backupPath)
             }
             Copy-Item -LiteralPath $fromDb -Destination $toDb -Force
-            Write-Host 'state.vscdb を同期しました（履歴表示用インデックス）。'
+            Write-Host (Get-Text 'StateDbSynced')
         } else {
-            Write-Warning '復元元に state.vscdb が見つからないため同期をスキップしました。'
+            Write-Warning (Get-Text 'StateDbSourceMissing')
         }
     } else {
-        Write-Host 'state.vscdb には触れていません（-IncludeStateDbIndex 未指定）。'
+        Write-Host (Get-Text 'StateDbUntouched')
     }
 
     Write-Host ''
-    Write-Host '=== 直接復元結果サマリー ==='
-    Write-Host "source セッション件数: $($sessionFiles.Count)"
-    Write-Host "コピー件数: $copiedCount / スキップ件数: $skippedCount"
-    Write-Host "復元先: $toRoot"
+    Write-Host (Get-Text 'RestoreSummaryHeader')
+    Write-Host (Get-Text 'RestoreSourceCount' $sessionFiles.Count)
+    Write-Host (Get-Text 'RestoreCopiedSkipped' $copiedCount $skippedCount)
+    Write-Host (Get-Text 'RestoreDestination' $toRoot)
     Write-Host ''
-    Write-Host '重要: 復元後はVS Codeを完全終了し、再起動してください。'
+    Write-Host (Get-Text 'RestartReminder')
 }
 
 function Invoke-ListWorkspaces {
     param([string]$SourceRoot)
 
     if (-not (Test-Path -LiteralPath $SourceRoot)) {
-        throw "抽出元フォルダが見つかりません: $SourceRoot"
+        throw (Get-Text 'SourceNotFound' $SourceRoot)
     }
 
     $rows = @()
@@ -630,9 +735,9 @@ function Invoke-ListWorkspaces {
         }
         $folderPath = Get-WorkspaceFolderPath -WorkspaceDir $wsDir
         if (-not $folderPath) {
-            $folderPath = '(workspace.json なし)'
+            $folderPath = Get-Text 'NoWorkspaceJson'
         } elseif (-not (Test-WorkspaceFolderPath -FolderPath $folderPath)) {
-            $folderPath = "⚠ $folderPath (フォルダが見つかりません。移動/改名/削除済みの可能性)"
+            $folderPath = Get-Text 'FolderMissingMarker' $folderPath
         }
 
         $rows += [PSCustomObject]@{
@@ -645,10 +750,10 @@ function Invoke-ListWorkspaces {
 
     $rows = @($rows | Sort-Object -Property @{ Expression = 'LastSessionAt'; Descending = $true })
     $rows | Format-Table -AutoSize -Property WorkspaceId, Folder, SessionCount, LastSessionAt | Out-String -Width 4096 | Write-Host
-    Write-Host "合計ワークスペース数: $($rows.Count)"
-    Write-Host '⚠ が付いているワークスペースは、記録されたフォルダが現在見つかりません。復元先として指定すると、実際にVS Codeで開いているフォルダとは異なる場所に復元してしまう可能性があるため注意してください。'
+    Write-Host (Get-Text 'TotalWorkspaces' $rows.Count)
+    Write-Host (Get-Text 'FolderMissingNote')
     Write-Host ''
-    Write-Host 'WorkspaceId の値を -RestoreFromWorkspaceId / -RestoreToWorkspaceId に指定してください。'
+    Write-Host (Get-Text 'WorkspaceIdHint')
 }
 
 function Invoke-ListSessions {
@@ -656,16 +761,16 @@ function Invoke-ListSessions {
 
     $wsPath = Join-Path $SourceRoot $WorkspaceId
     if (-not (Test-Path -LiteralPath $wsPath)) {
-        throw "ワークスペースフォルダが見つかりません: $wsPath"
+        throw (Get-Text 'WorkspaceFolderNotFound' $wsPath)
     }
     $chatSessionsPath = Join-Path $wsPath 'chatSessions'
     if (-not (Test-Path -LiteralPath $chatSessionsPath)) {
-        throw "chatSessions フォルダが見つかりません: $chatSessionsPath"
+        throw (Get-Text 'ChatSessionsNotFound' $chatSessionsPath)
     }
 
     $rows = @()
     foreach ($jf in (Get-ChildItem -LiteralPath $chatSessionsPath -Filter '*.jsonl' -File -ErrorAction SilentlyContinue)) {
-        $topic = '(読み取り不可)'
+        $topic = Get-Text 'Unreadable'
         $reqCount = 0
         try {
             $session = Read-ChatSessionFile -Path $jf.FullName
@@ -675,11 +780,11 @@ function Invoke-ListSessions {
                     $topic = (Get-MessageText $session.requests[0].message).Trim()
                     if ($topic.Length -gt 60) { $topic = $topic.Substring(0, 60) + '…' }
                 } else {
-                    $topic = '(発言なし)'
+                    $topic = Get-Text 'NoMessages'
                 }
             }
         } catch {
-            Write-Warning "セッション読み取りに失敗しました ($($jf.FullName)): $($_.Exception.Message)"
+            Write-Warning (Get-Text 'SessionReadFailed' $jf.FullName $_.Exception.Message)
         }
 
         $rows += [PSCustomObject]@{
@@ -692,9 +797,9 @@ function Invoke-ListSessions {
 
     $rows = @($rows | Sort-Object LastModified -Descending)
     $rows | Format-Table -AutoSize -Property SessionId, LastModified, MessageCount, Topic | Out-String -Width 4096 | Write-Host
-    Write-Host "合計セッション数: $($rows.Count)"
+    Write-Host (Get-Text 'TotalSessions' $rows.Count)
     Write-Host ''
-    Write-Host 'SessionId の値を -SessionId に指定すると、直接復元の対象を絞り込めます。'
+    Write-Host (Get-Text 'SessionIdHint')
 }
 
 try {
@@ -704,7 +809,7 @@ try {
         Invoke-ListSessions -SourceRoot $SourceRoot -WorkspaceId $ListSessionsForWorkspaceId
     } elseif ($RestoreToWorkspaceId) {
         if (-not $RestoreFromWorkspaceId -and -not $RestorePackagePath) {
-            throw '直接復元には RestoreFromWorkspaceId を指定してください（restore-package から復元する場合は RestorePackagePath も併せて指定し、RestoreFromWorkspaceId には "restore-package" を指定します）。'
+            throw (Get-Text 'RestoreFromIdRequired')
         }
         # RestorePackagePath 指定時に RestoreFromWorkspaceId を省略した場合は "restore-package" を既定値として使う
         $effectiveFromId = if ($RestoreFromWorkspaceId) { $RestoreFromWorkspaceId } else { 'restore-package' }
@@ -713,6 +818,6 @@ try {
         Invoke-ExtractMode -SourceRoot $SourceRoot -OutputRoot $OutputRoot -Since $Since -IncludeSummary:$IncludeSummary -CreateRestorePackage:$CreateRestorePackage -IncludeStateDbIndex:$IncludeStateDbIndex
     }
 } catch {
-    Write-Error "処理中にエラーが発生しました: $($_.Exception.Message)"
+    Write-Error (Get-Text 'ProcessingError' $_.Exception.Message)
     exit 1
 }
