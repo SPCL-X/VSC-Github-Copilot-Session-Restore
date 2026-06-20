@@ -52,7 +52,7 @@ After step 4, fully quit and restart VS Code.
 
 ### Full guide
 
-Open [`docs/copilot-session-restore-guide/index.html`](docs/copilot-session-restore-guide/index.html) directly in any browser — it works fully offline, no server needed.
+Open [`docs/copilot-session-restore-guide/index.html`](docs/copilot-session-restore-guide/index.html) directly in any browser — it works fully offline, no server needed. Use the language switch in the top-right corner to toggle between English and Japanese.
 
 ### Safety notes
 
@@ -113,7 +113,7 @@ VS Code の GitHub Copilot Chat のセッション履歴は `%APPDATA%\Code\User
 
 ### 詳しい手順書
 
-[`docs/copilot-session-restore-guide/index.html`](docs/copilot-session-restore-guide/index.html) をブラウザで直接開いてください。完全オフラインで動作し、サーバーは不要です。
+[`docs/copilot-session-restore-guide/index.html`](docs/copilot-session-restore-guide/index.html) をブラウザで直接開いてください。完全オフラインで動作し、サーバーは不要です。右上の言語切替で日本語/Englishを切り替えられます。
 
 ### 安全に使うための注意
 
